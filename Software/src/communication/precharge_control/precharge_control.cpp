@@ -35,7 +35,7 @@ static float g05_tps_voltage = 4.0f;
 
 #define TPS_REG_REF_LSB 0x00
 #define TPS_REG_REF_MSB 0x01
-#define TPS_REG_MODE    0x06
+#define TPS_REG_MODE 0x06
 
 static bool tps_write(uint8_t reg, uint8_t value) {
   G05Wire.beginTransmission(TPS55288_ADDR);
@@ -54,24 +54,30 @@ static uint8_t tps_read(uint8_t reg) {
 
 static void tps_enable_output(bool enable) {
   uint8_t mode = tps_read(TPS_REG_MODE);
-  if (enable) mode |= 0x80;
-  else mode &= 0x7F;
+  if (enable)
+    mode |= 0x80;
+  else
+    mode &= 0x7F;
   tps_write(TPS_REG_MODE, mode);
 }
 
 static void tps_set_voltage(float vout) {
-  if (vout < 0.8f) vout = 0.8f;
-  if (vout > 20.0f) vout = 20.0f;
+  if (vout < 0.8f)
+    vout = 0.8f;
+  if (vout > 20.0f)
+    vout = 20.0f;
 
   uint16_t code = roundf((vout - 0.8f) / 0.020f);
-  if (code > 960) code = 960;
+  if (code > 960)
+    code = 960;
 
   tps_write(TPS_REG_REF_LSB, code & 0xFF);
   tps_write(TPS_REG_REF_MSB, (code >> 8) & 0x03);
 }
 
 static bool g05_i2c_init_if_needed() {
-  if (g05_initialized) return true;
+  if (g05_initialized)
+    return true;
 
   auto sda = esp32hal->I2C_G05_SDA_PIN();
   auto scl = esp32hal->I2C_G05_SCL_PIN();
@@ -100,7 +106,8 @@ static bool g05_i2c_init_if_needed() {
 
 static void disable_precharge_output(gpio_num_t hia4v1_pin) {
   if (precharge_control_i2c_g05_enabled) {
-    if (g05_initialized) tps_enable_output(false);
+    if (g05_initialized)
+      tps_enable_output(false);
   } else {
     pinMode(hia4v1_pin, OUTPUT);
     digitalWrite(hia4v1_pin, LOW);
@@ -226,8 +233,10 @@ void handle_precharge_control(unsigned long currentMillis) {
               g05_tps_voltage -= step;
             }
 
-            if (g05_tps_voltage < 4.0f) g05_tps_voltage = 4.0f;
-            if (g05_tps_voltage > 11.0f) g05_tps_voltage = 11.0f;
+            if (g05_tps_voltage < 4.0f)
+              g05_tps_voltage = 4.0f;
+            if (g05_tps_voltage > 11.0f)
+              g05_tps_voltage = 11.0f;
 
             tps_set_voltage(g05_tps_voltage);
             logging.printf("Precharge G05: Target: %d V  Extern: %d V  Error: %d dV  TPS: %.2f V\n",
@@ -235,37 +244,38 @@ void handle_precharge_control(unsigned long currentMillis) {
           }
         }
       } else {
-      //  Check if external voltage measurement changed, for instance with the MEB batteries, the external voltage is only updated every 100ms.
-      if (prev_external_voltage != external_voltage && external_voltage != 0) {
-        prev_external_voltage = external_voltage;
+        //  Check if external voltage measurement changed, for instance with the MEB batteries, the external voltage is only updated every 100ms.
+        if (prev_external_voltage != external_voltage && external_voltage != 0) {
+          prev_external_voltage = external_voltage;
 
-        if (labs(target_voltage - external_voltage) > 150) {
-          delta_freq = 2000;
-        } else if (labs(target_voltage - external_voltage) > 80) {
-          delta_freq = labs(target_voltage - external_voltage) * 6;
-        } else {
-          delta_freq = labs(target_voltage - external_voltage) * 3;
+          if (labs(target_voltage - external_voltage) > 150) {
+            delta_freq = 2000;
+          } else if (labs(target_voltage - external_voltage) > 80) {
+            delta_freq = labs(target_voltage - external_voltage) * 6;
+          } else {
+            delta_freq = labs(target_voltage - external_voltage) * 3;
+          }
+          if (target_voltage > external_voltage) {
+            freq += delta_freq;
+          } else {
+            freq -= delta_freq;
+          }
+          if (freq > Precharge_max_PWM_Freq)
+            freq = Precharge_max_PWM_Freq;
+          if (freq < Precharge_min_PWM_Freq)
+            freq = Precharge_min_PWM_Freq;
+          logging.printf("Precharge: Target: %d V  Extern: %d V  Frequency: %u\n", target_voltage / 10,
+                         external_voltage / 10, freq);
+          ledcWriteTone(hia4v1_pin, freq);
         }
-        if (target_voltage > external_voltage) {
-          freq += delta_freq;
-        } else {
-          freq -= delta_freq;
-        }
-        if (freq > Precharge_max_PWM_Freq)
-          freq = Precharge_max_PWM_Freq;
-        if (freq < Precharge_min_PWM_Freq)
-          freq = Precharge_min_PWM_Freq;
-        logging.printf("Precharge: Target: %d V  Extern: %d V  Frequency: %u\n", target_voltage / 10,
-                       external_voltage / 10, freq);
-        ledcWriteTone(hia4v1_pin, freq);
-      }
       }
 
       if (currentMillis - prechargeStartTime >= precharge_max_precharge_time_before_fault ||
           datalayer.battery.status.real_bms_status == BMS_FAULT) {
         pinMode(hia4v1_pin, OUTPUT);
         digitalWrite(hia4v1_pin, LOW);
-        if (precharge_control_i2c_g05_enabled) tps_enable_output(false);
+        if (precharge_control_i2c_g05_enabled)
+          tps_enable_output(false);
         digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_FAILURE;
         logging.printf("Precharge: CRITICAL FAILURE (timeout/BMS fault) -> REQUIRES REBOOT\n");

@@ -395,12 +395,11 @@ void init_webserver() {
   });
 
   const char* boolSettingNames[] = {
-      "DBLBTR",       "CNTCTRL",      "CNTCTRLDBL",    "PWMCNTCTRL",  "PERBMSRESET", "SDLOGENABLED",
-      "STATICIP",     "REMBMSRESET",  "USBENABLED",    "CANLOGUSB",   "WEBENABLED",
-      "CANFDASCAN",   "CANLOGSD",     "WIFIAPENABLED", "MQTTENABLED", "NOINVDISC",   "HADISC",
-      "MQTTTOPICS",   "MQTTCELLV",    "INVICNT",       "GTWRHD",      "DIGITALHVIL", "PERFPROFILE",
-      "INTERLOCKREQ", "SOCESTIMATED", "PYLONOFFSET",   "PYLONORDER",  "DEYEBYD",     "NCCONTACTOR",
-      "TRIBTR",       "CNTCTRLTRI",   "ESPNOWENABLED", "PRIMOGEN24",  "CTINVERT",    "LOWPASSFILTER",
+      "DBLBTR",      "CNTCTRL",     "CNTCTRLDBL",   "PWMCNTCTRL",    "PERBMSRESET", "SDLOGENABLED", "STATICIP",
+      "REMBMSRESET", "USBENABLED",  "CANLOGUSB",    "WEBENABLED",    "CANFDASCAN",  "CANLOGSD",     "WIFIAPENABLED",
+      "MQTTENABLED", "NOINVDISC",   "HADISC",       "MQTTTOPICS",    "MQTTCELLV",   "INVICNT",      "GTWRHD",
+      "DIGITALHVIL", "PERFPROFILE", "INTERLOCKREQ", "SOCESTIMATED",  "PYLONOFFSET", "PYLONORDER",   "DEYEBYD",
+      "NCCONTACTOR", "TRIBTR",      "CNTCTRLTRI",   "ESPNOWENABLED", "PRIMOGEN24",  "CTINVERT",     "LOWPASSFILTER",
   };
 
   const char* uintSettingNames[] = {
@@ -422,14 +421,14 @@ void init_webserver() {
               BatteryEmulatorSettingsStore settings;
 
               if (request->hasParam("EXTPREMODE", true)) {
-              auto modeParam = request->getParam("EXTPREMODE", true);
-              int mode = atoi(modeParam->value().c_str());
+                auto modeParam = request->getParam("EXTPREMODE", true);
+                int mode = atoi(modeParam->value().c_str());
 
-              settings.saveUInt("EXTPREMODE", mode);
-              settings.saveBool("EXTPRECHARGE", mode != 0);
-              settings.saveBool("EXTPREG05", mode == 2);
+                settings.saveUInt("EXTPREMODE", mode);
+                settings.saveBool("EXTPRECHARGE", mode != 0);
+                settings.saveBool("EXTPREG05", mode == 2);
               }
-              
+
               int numParams = request->params();
               for (int i = 0; i < numParams; i++) {
                 auto p = request->getParam(i);
