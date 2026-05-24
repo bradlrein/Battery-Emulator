@@ -167,7 +167,10 @@ void init_stored_settings() {
   user_selected_gpioopt5 = (GPIOOPT5)settings.getUInt("GPIOOPT5", 0);
 #endif
 
-  precharge_control_enabled = settings.getBool("EXTPRECHARGE", false);
+  uint8_t extprecharge_mode = settings.getUInt("EXTPREMODE", 0);
+  precharge_control_enabled = extprecharge_mode != 0;
+  precharge_control_i2c_g05_enabled = extprecharge_mode == 2;
+
   precharge_inverter_normally_open_contactor = settings.getBool("NOINVDISC", false);
   precharge_max_precharge_time_before_fault = settings.getUInt("MAXPRETIME", 15000);
   Precharge_max_PWM_Freq = settings.getUInt("MAXPREFREQ", 34000);

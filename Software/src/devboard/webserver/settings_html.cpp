@@ -451,8 +451,14 @@ String raw_settings_processor(const String& var, BatteryEmulatorSettingsStore& s
     return settings.getBool("REMBMSRESET") ? "checked" : "";
   }
 
-  if (var == "EXTPRECHARGE") {
-    return settings.getBool("EXTPRECHARGE") ? "checked" : "";
+  if (var == "EXTPRECHARGE_DISABLED") {
+    return settings.getUInt("EXTPREMODE", 0) == 0 ? "selected" : "";
+  }
+  if (var == "EXTPRECHARGE_HIA4V1") {
+    return settings.getUInt("EXTPREMODE", 0) == 1 ? "selected" : "";
+  }
+  if (var == "EXTPREG05") {
+    return settings.getUInt("EXTPREMODE", 0) == 2 ? "selected" : "";
   }
 
   if (var == "MAXPRETIME") {
@@ -1718,8 +1724,12 @@ const char* getCANInterfaceName(CAN_Interface interface) {
         <label>Periodic BMS reset every 24h: </label>
         <input type='checkbox' name='PERBMSRESET' value='on' %PERBMSRESET% /> 
 
-        <label>External precharge via HIA4V1: </label>
-        <input type='checkbox' name='EXTPRECHARGE' value='on' %EXTPRECHARGE% />
+        <label for='EXTPREMODE'>External precharge: </label>
+        <select name='EXTPREMODE' id='EXTPREMODE'>
+          <option value='0' %EXTPRECHARGE_DISABLED%>Disabled</option>
+          <option value='1' %EXTPRECHARGE_HIA4V1%>HIA4V1 PWM</option>
+          <option value='2' %EXTPREG05%>I2C + G05</option>
+        </select>
 
         <div class="if-extprecharge">
             <label>Precharge, maximum ms before fault: </label>

@@ -1,5 +1,6 @@
 #include "precharge_control.h"
 #include <Arduino.h>
+#include <Wire.h>
 #include "../../datalayer/datalayer.h"
 #include "../../datalayer/datalayer_extended.h"
 #include "../../devboard/hal/hal.h"
@@ -7,6 +8,7 @@
 
 // Parameters adjustable by user in Settings page
 bool precharge_control_enabled = false;
+bool precharge_control_i2c_g05_enabled = false;
 bool precharge_inverter_normally_open_contactor = false;
 uint16_t precharge_max_precharge_time_before_fault = 15000;
 uint16_t Precharge_max_PWM_Freq = 34000;
@@ -25,6 +27,86 @@ static uint32_t freq = Precharge_default_PWM_Freq;
 static uint16_t delta_freq = 1;
 static int32_t prev_external_voltage = 20000;
 
+static TwoWire G05Wire = TwoWire(1);
+static bool g05_initialized = false;
+static uint8_t TPS55288_ADDR = 0x74;
+static unsigned long last_i2c_update = 0;
+static float g05_tps_voltage = 4.0f;
+
+#define TPS_REG_REF_LSB 0x00
+#define TPS_REG_REF_MSB 0x01
+#define TPS_REG_MODE    0x06
+
+static bool tps_write(uint8_t reg, uint8_t value) {
+  G05Wire.beginTransmission(TPS55288_ADDR);
+  G05Wire.write(reg);
+  G05Wire.write(value);
+  return G05Wire.endTransmission() == 0;
+}
+
+static uint8_t tps_read(uint8_t reg) {
+  G05Wire.beginTransmission(TPS55288_ADDR);
+  G05Wire.write(reg);
+  G05Wire.endTransmission(false);
+  G05Wire.requestFrom(TPS55288_ADDR, (uint8_t)1);
+  return G05Wire.available() ? G05Wire.read() : 0;
+}
+
+static void tps_enable_output(bool enable) {
+  uint8_t mode = tps_read(TPS_REG_MODE);
+  if (enable) mode |= 0x80;
+  else mode &= 0x7F;
+  tps_write(TPS_REG_MODE, mode);
+}
+
+static void tps_set_voltage(float vout) {
+  if (vout < 0.8f) vout = 0.8f;
+  if (vout > 20.0f) vout = 20.0f;
+
+  uint16_t code = roundf((vout - 0.8f) / 0.020f);
+  if (code > 960) code = 960;
+
+  tps_write(TPS_REG_REF_LSB, code & 0xFF);
+  tps_write(TPS_REG_REF_MSB, (code >> 8) & 0x03);
+}
+
+static bool g05_i2c_init_if_needed() {
+  if (g05_initialized) return true;
+
+  auto sda = esp32hal->I2C_G05_SDA_PIN();
+  auto scl = esp32hal->I2C_G05_SCL_PIN();
+
+  if (sda == GPIO_NUM_NC || scl == GPIO_NUM_NC) {
+    logging.printf("Precharge G05: I2C pins not configured for this hardware\n");
+    return false;
+  }
+
+  G05Wire.begin((int)sda, (int)scl, 100000);
+
+  const uint8_t addrs[] = {0x74, 0x75};
+  for (uint8_t a : addrs) {
+    G05Wire.beginTransmission(a);
+    if (G05Wire.endTransmission() == 0) {
+      TPS55288_ADDR = a;
+      g05_initialized = true;
+      logging.printf("Precharge G05: TPS55288 found at 0x%02X\n", a);
+      return true;
+    }
+  }
+
+  logging.printf("Precharge G05: TPS55288 not found\n");
+  return false;
+}
+
+static void disable_precharge_output(gpio_num_t hia4v1_pin) {
+  if (precharge_control_i2c_g05_enabled) {
+    if (g05_initialized) tps_enable_output(false);
+  } else {
+    pinMode(hia4v1_pin, OUTPUT);
+    digitalWrite(hia4v1_pin, LOW);
+  }
+}
+
 // Initialization functions
 
 bool init_precharge_control() {
@@ -35,13 +117,21 @@ bool init_precharge_control() {
   auto hia4v1_pin = esp32hal->HIA4V1_PIN();
   auto inverter_disconnect_contactor_pin = esp32hal->INVERTER_DISCONNECT_CONTACTOR_PIN();
 
-  if (!esp32hal->alloc_pins("Precharge control", hia4v1_pin, inverter_disconnect_contactor_pin)) {
-    DEBUG_PRINTF("Precharge control setup failed\n");
-    return false;
+  if (precharge_control_i2c_g05_enabled) {
+    if (!esp32hal->alloc_pins("Precharge control", inverter_disconnect_contactor_pin)) {
+      DEBUG_PRINTF("Precharge control setup failed\n");
+      return false;
+    }
+  } else {
+    if (!esp32hal->alloc_pins("Precharge control", hia4v1_pin, inverter_disconnect_contactor_pin)) {
+      DEBUG_PRINTF("Precharge control setup failed\n");
+      return false;
+    }
+
+    pinMode(hia4v1_pin, OUTPUT);
+    digitalWrite(hia4v1_pin, LOW);
   }
 
-  pinMode(hia4v1_pin, OUTPUT);
-  digitalWrite(hia4v1_pin, LOW);
   pinMode(inverter_disconnect_contactor_pin, OUTPUT);
   digitalWrite(inverter_disconnect_contactor_pin, LOW);
 
@@ -56,8 +146,7 @@ void handle_precharge_control(unsigned long currentMillis) {
 
   // If we're in FAILURE state, completely disable any further precharge attempts
   if (datalayer.system.status.precharge_status == AUTO_PRECHARGE_FAILURE) {
-    pinMode(hia4v1_pin, OUTPUT);
-    digitalWrite(hia4v1_pin, LOW);
+    disable_precharge_output(hia4v1_pin);
     digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
     return;  // Exit immediately - no further processing allowed. Reboot required to recover
   }
@@ -78,9 +167,19 @@ void handle_precharge_control(unsigned long currentMillis) {
       }
       break;
     case AUTO_PRECHARGE_START:
-      freq = Precharge_default_PWM_Freq;
-      ledcAttachChannel(hia4v1_pin, freq, Precharge_PWM_Res, PWM_Precharge_Channel);
-      ledcWriteTone(hia4v1_pin, freq);  // Set frequency and set dutycycle to 50%
+      if (precharge_control_i2c_g05_enabled) {
+        if (g05_i2c_init_if_needed()) {
+          tps_set_voltage(4.0f);
+          tps_enable_output(true);
+          logging.printf("Precharge G05: Output enabled\n");
+        } else {
+          logging.printf("Precharge G05: waiting for TPS55288 power-up\n");
+        }
+      } else {
+        freq = Precharge_default_PWM_Freq;
+        ledcAttachChannel(hia4v1_pin, freq, Precharge_PWM_Res, PWM_Precharge_Channel);
+        ledcWriteTone(hia4v1_pin, freq);  // Set frequency and set dutycycle to 50%
+      }
       prechargeStartTime = currentMillis;
       datalayer.system.status.precharge_status = AUTO_PRECHARGE_PRECHARGING;
       logging.printf("Precharge: Starting sequence\n");
@@ -88,6 +187,54 @@ void handle_precharge_control(unsigned long currentMillis) {
       break;
 
     case AUTO_PRECHARGE_PRECHARGING:
+      if (precharge_control_i2c_g05_enabled) {
+        if (!g05_initialized) {
+          if (currentMillis - last_i2c_update >= 50) {
+            last_i2c_update = currentMillis;
+
+            if (g05_i2c_init_if_needed()) {
+              g05_tps_voltage = 4.0f;
+              tps_set_voltage(g05_tps_voltage);
+              tps_enable_output(true);
+              logging.printf("Precharge G05: TPS55288 found, output enabled\n");
+            } else {
+              logging.printf("Precharge G05: waiting for TPS55288\n");
+            }
+          }
+        } else if (currentMillis - last_i2c_update >= 250) {
+          last_i2c_update = currentMillis;
+
+          if (external_voltage == 0) {
+            logging.printf("Precharge G05: waiting for external voltage feedback\n");
+          } else {
+            int32_t error_dV = target_voltage - external_voltage;
+
+            float step = 0.02f;  // 20mV minimum TPS step
+            if (labs(error_dV) > 200) {
+              step = 0.50f;
+            } else if (labs(error_dV) > 100) {
+              step = 0.25f;
+            } else if (labs(error_dV) > 50) {
+              step = 0.10f;
+            } else if (labs(error_dV) > 20) {
+              step = 0.04f;
+            }
+
+            if (error_dV > 10) {
+              g05_tps_voltage += step;
+            } else if (error_dV < -10) {
+              g05_tps_voltage -= step;
+            }
+
+            if (g05_tps_voltage < 4.0f) g05_tps_voltage = 4.0f;
+            if (g05_tps_voltage > 11.0f) g05_tps_voltage = 11.0f;
+
+            tps_set_voltage(g05_tps_voltage);
+            logging.printf("Precharge G05: Target: %d V  Extern: %d V  Error: %d dV  TPS: %.2f V\n",
+                           target_voltage / 10, external_voltage / 10, error_dV, g05_tps_voltage);
+          }
+        }
+      } else {
       //  Check if external voltage measurement changed, for instance with the MEB batteries, the external voltage is only updated every 100ms.
       if (prev_external_voltage != external_voltage && external_voltage != 0) {
         prev_external_voltage = external_voltage;
@@ -112,11 +259,13 @@ void handle_precharge_control(unsigned long currentMillis) {
                        external_voltage / 10, freq);
         ledcWriteTone(hia4v1_pin, freq);
       }
+      }
 
       if (currentMillis - prechargeStartTime >= precharge_max_precharge_time_before_fault ||
           datalayer.battery.status.real_bms_status == BMS_FAULT) {
         pinMode(hia4v1_pin, OUTPUT);
         digitalWrite(hia4v1_pin, LOW);
+        if (precharge_control_i2c_g05_enabled) tps_enable_output(false);
         digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_FAILURE;
         logging.printf("Precharge: CRITICAL FAILURE (timeout/BMS fault) -> REQUIRES REBOOT\n");
@@ -126,14 +275,12 @@ void handle_precharge_control(unsigned long currentMillis) {
       } else if ((datalayer.battery.status.real_bms_status != BMS_STANDBY &&
                   datalayer.battery.status.real_bms_status != BMS_ACTIVE) ||
                  datalayer.system.status.system_status != ACTIVE || datalayer.system.info.equipment_stop_active) {
-        pinMode(hia4v1_pin, OUTPUT);
-        digitalWrite(hia4v1_pin, LOW);
+        disable_precharge_output(hia4v1_pin);
         digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_IDLE;
         logging.printf("Precharge: Disabling Precharge bms not standby/active or equipment stop\n");
       } else if (datalayer.system.status.battery_allows_contactor_closing) {
-        pinMode(hia4v1_pin, OUTPUT);
-        digitalWrite(hia4v1_pin, LOW);
+        disable_precharge_output(hia4v1_pin);
         digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_COMPLETED;
         logging.printf("Precharge: Disabled (contacts closed) -> COMPLETED\n");
@@ -157,8 +304,7 @@ void handle_precharge_control(unsigned long currentMillis) {
           !datalayer.system.status.inverter_allows_contactor_closing || datalayer.system.info.equipment_stop_active ||
           datalayer.system.status.system_status != FAULT) {
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_IDLE;
-        pinMode(hia4v1_pin, OUTPUT);
-        digitalWrite(hia4v1_pin, LOW);
+        disable_precharge_output(hia4v1_pin);
         logging.printf("Precharge: equipment stop activated -> IDLE\n");
       }
       break;
