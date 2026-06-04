@@ -589,6 +589,34 @@ void init_webserver() {
     datalayer_extended.bydAtto3.calibrationTargetSOC = static_cast<uint16_t>(value.toFloat());
   });
 
+  // Save auto-calibrate enabled flag to RAM + NVM
+  def_route_with_auth("/editBydAtto3AutoCalEnabled", server, HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (request->hasParam("value")) {
+      bool enabled = request->getParam("value")->value().toInt() != 0;
+      datalayer_extended.bydAtto3.auto_calibrate_soc_enabled = enabled;
+      Preferences prefs;
+      prefs.begin("batterySettings", false);
+      prefs.putBool("BYDAUTOCALEN", enabled);
+      prefs.end();
+    }
+    request->send(200, "text/plain", "OK");
+  });
+
+  // Save auto-calibrate drift threshold to RAM + NVM
+  def_route_with_auth("/editBydAtto3AutoCalDriftPercent", server, HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (request->hasParam("value")) {
+      int value = request->getParam("value")->value().toInt();
+      if (value >= 1 && value <= 20) {
+        datalayer_extended.bydAtto3.auto_calibrate_soc_drift_percent = (uint8_t)value;
+        Preferences prefs;
+        prefs.begin("batterySettings", false);
+        prefs.putUChar("BYDAUTOCALDRIFT", (uint8_t)value);
+        prefs.end();
+      }
+    }
+    request->send(200, "text/plain", "OK");
+  });
+
   // Route for editing AH Calibration BYD
   update_string_setting("/editCalTargetAH", [](String value) {
     datalayer_extended.bydAtto3.calibrationTargetAH = static_cast<uint16_t>(value.toFloat());
@@ -871,6 +899,9 @@ String processor(const String& var) {
 #ifdef HW_STARK
     content += " Hardware: Stark CMR Module";
 #endif  // HW_STARK
+#ifdef HW_WAVESHARE
+    content += " Hardware: Waveshare ESP32-S3-RS485-CAN";
+#endif  // HW_WAVESHARE
     content += " @ " + String(datalayer.system.info.CPU_temperature, 1) + " &deg;C</h4>";
     content += "<h4>Uptime: " + get_uptime() + "</h4>";
     if (datalayer.system.info.performance_measurement_active) {
