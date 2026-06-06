@@ -166,6 +166,9 @@ void init_stored_settings() {
 #ifdef HW_STARK
   user_selected_gpioopt5 = (GPIOOPT5)settings.getUInt("GPIOOPT5", 0);
 #endif
+#ifdef HW_WAVESHARE
+  user_selected_gpioopt6 = (GPIOOPT6)settings.getUInt("GPIOOPT6", 0);
+#endif
 
   uint8_t extprecharge_mode = settings.getUInt("EXTPREMODE", 0);
   precharge_control_enabled = extprecharge_mode != 0;
