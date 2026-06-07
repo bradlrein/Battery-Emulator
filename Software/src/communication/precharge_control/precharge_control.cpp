@@ -1,6 +1,6 @@
 #include "precharge_control.h"
+#include "precharge_control_i2c_g05.h"
 #include <Arduino.h>
-#include <Wire.h>
 #include "../../datalayer/datalayer.h"
 #include "../../datalayer/datalayer_extended.h"
 #include "../../devboard/hal/hal.h"
@@ -26,88 +26,29 @@ static unsigned long prechargeStartTime = 0;
 static uint32_t freq = Precharge_default_PWM_Freq;
 static uint16_t delta_freq = 1;
 static int32_t prev_external_voltage = 20000;
-
-static TwoWire G05Wire = TwoWire(1);
-static bool g05_initialized = false;
-static uint8_t TPS55288_ADDR = 0x74;
 static unsigned long last_i2c_update = 0;
 static float g05_tps_voltage = 4.0f;
 
-#define TPS_REG_REF_LSB 0x00
-#define TPS_REG_REF_MSB 0x01
-#define TPS_REG_MODE 0x06
+static float g05_target_to_tps_voltage(int32_t target_dV) {
+  float target_V = target_dV / 10.0f;
 
-static bool tps_write(uint8_t reg, uint8_t value) {
-  G05Wire.beginTransmission(TPS55288_ADDR);
-  G05Wire.write(reg);
-  G05Wire.write(value);
-  return G05Wire.endTransmission() == 0;
+  // Gemessene Kennlinie:
+  // TPS 4.0 V  -> ca. 175 V extern
+  // TPS 11.0 V -> ca. 500 V extern
+  float tps = 4.0f + ((target_V - 175.0f) * 7.0f / 325.0f);
+
+  if (tps < 4.0f)
+    tps = 4.0f;
+  if (tps > 11.0f)
+    tps = 11.0f;
+
+  return tps;
 }
 
-static uint8_t tps_read(uint8_t reg) {
-  G05Wire.beginTransmission(TPS55288_ADDR);
-  G05Wire.write(reg);
-  G05Wire.endTransmission(false);
-  G05Wire.requestFrom(TPS55288_ADDR, (uint8_t)1);
-  return G05Wire.available() ? G05Wire.read() : 0;
-}
-
-static void tps_enable_output(bool enable) {
-  uint8_t mode = tps_read(TPS_REG_MODE);
-  if (enable)
-    mode |= 0x80;
-  else
-    mode &= 0x7F;
-  tps_write(TPS_REG_MODE, mode);
-}
-
-static void tps_set_voltage(float vout) {
-  if (vout < 0.8f)
-    vout = 0.8f;
-  if (vout > 20.0f)
-    vout = 20.0f;
-
-  uint16_t code = roundf((vout - 0.8f) / 0.020f);
-  if (code > 960)
-    code = 960;
-
-  tps_write(TPS_REG_REF_LSB, code & 0xFF);
-  tps_write(TPS_REG_REF_MSB, (code >> 8) & 0x03);
-}
-
-static bool g05_i2c_init_if_needed() {
-  if (g05_initialized)
-    return true;
-
-  auto sda = esp32hal->I2C_G05_SDA_PIN();
-  auto scl = esp32hal->I2C_G05_SCL_PIN();
-
-  if (sda == GPIO_NUM_NC || scl == GPIO_NUM_NC) {
-    logging.printf("Precharge G05: I2C pins not configured for this hardware\n");
-    return false;
-  }
-
-  G05Wire.begin((int)sda, (int)scl, 100000);
-
-  const uint8_t addrs[] = {0x74, 0x75};
-  for (uint8_t a : addrs) {
-    G05Wire.beginTransmission(a);
-    if (G05Wire.endTransmission() == 0) {
-      TPS55288_ADDR = a;
-      g05_initialized = true;
-      logging.printf("Precharge G05: TPS55288 found at 0x%02X\n", a);
-      return true;
-    }
-  }
-
-  logging.printf("Precharge G05: TPS55288 not found\n");
-  return false;
-}
 
 static void disable_precharge_output(gpio_num_t hia4v1_pin) {
   if (precharge_control_i2c_g05_enabled) {
-    if (g05_initialized)
-      tps_enable_output(false);
+    g05_disable_output();
   } else {
     pinMode(hia4v1_pin, OUTPUT);
     digitalWrite(hia4v1_pin, LOW);
@@ -176,8 +117,8 @@ void handle_precharge_control(unsigned long currentMillis) {
     case AUTO_PRECHARGE_START:
       if (precharge_control_i2c_g05_enabled) {
         if (g05_i2c_init_if_needed()) {
-          tps_set_voltage(4.0f);
-          tps_enable_output(true);
+          g05_set_voltage(4.0f);
+          g05_enable_output();
           logging.printf("Precharge G05: Output enabled\n");
         } else {
           logging.printf("Precharge G05: waiting for TPS55288 power-up\n");
@@ -195,20 +136,20 @@ void handle_precharge_control(unsigned long currentMillis) {
 
     case AUTO_PRECHARGE_PRECHARGING:
       if (precharge_control_i2c_g05_enabled) {
-        if (!g05_initialized) {
+        if (!g05_is_initialized()) {
           if (currentMillis - last_i2c_update >= 50) {
             last_i2c_update = currentMillis;
 
             if (g05_i2c_init_if_needed()) {
-              g05_tps_voltage = 4.0f;
-              tps_set_voltage(g05_tps_voltage);
-              tps_enable_output(true);
+              g05_tps_voltage = g05_target_to_tps_voltage(target_voltage);
+              g05_set_voltage(g05_tps_voltage);
+              g05_enable_output();
               logging.printf("Precharge G05: TPS55288 found, output enabled\n");
             } else {
               logging.printf("Precharge G05: waiting for TPS55288\n");
             }
           }
-        } else if (currentMillis - last_i2c_update >= 250) {
+        } else if (currentMillis - last_i2c_update >= 500) {
           last_i2c_update = currentMillis;
 
           if (external_voltage == 0) {
@@ -238,7 +179,7 @@ void handle_precharge_control(unsigned long currentMillis) {
             if (g05_tps_voltage > 11.0f)
               g05_tps_voltage = 11.0f;
 
-            tps_set_voltage(g05_tps_voltage);
+            g05_set_voltage(g05_tps_voltage);
             logging.printf("Precharge G05: Target: %d V  Extern: %d V  Error: %d dV  TPS: %.2f V\n",
                            target_voltage / 10, external_voltage / 10, error_dV, g05_tps_voltage);
           }
@@ -275,7 +216,7 @@ void handle_precharge_control(unsigned long currentMillis) {
         pinMode(hia4v1_pin, OUTPUT);
         digitalWrite(hia4v1_pin, LOW);
         if (precharge_control_i2c_g05_enabled)
-          tps_enable_output(false);
+          g05_disable_output();
         digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_FAILURE;
         logging.printf("Precharge: CRITICAL FAILURE (timeout/BMS fault) -> REQUIRES REBOOT\n");
