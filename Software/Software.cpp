@@ -39,7 +39,7 @@
 #endif
 
 // The current software version, shown on webserver
-const char* version_number = "10.11.dev";
+const char* version_number = "10.13.dev";
 
 // Interval timers
 volatile unsigned long currentMillis = 0;
@@ -465,7 +465,7 @@ void core_loop(void*) {
         monitor_equipment_stop_button();
         led_exe();
         handle_contactors();  // Take care of startup precharge/contactor closing
-        if (precharge_control_enabled) {
+        if (is_precharge_control_enabled()) {
           handle_precharge_control(currentMillis);  //Drive the hia4v1 via PWM
         }
         END_TIME_MEASUREMENT_MAX(10ms, datalayer.system.status.time_10ms_us);
@@ -473,7 +473,7 @@ void core_loop(void*) {
         monitor_equipment_stop_button();
         led_exe();
         handle_contactors();  // Take care of startup precharge/contactor closing
-        if (precharge_control_enabled) {
+        if (is_precharge_control_enabled()) {
           handle_precharge_control(currentMillis);  //Drive the hia4v1 via PWM
         }
       }

@@ -7,8 +7,15 @@
 #include "src/battery/BATTERIES.h"
 
 // Parameters adjustable by user in Settings page
-bool precharge_control_enabled = false;
-bool precharge_control_i2c_g05_enabled = false;
+PrechargeControlMode precharge_control_mode = PrechargeControlMode::Disabled;
+
+bool is_precharge_control_enabled() {
+  return precharge_control_mode != PrechargeControlMode::Disabled;
+}
+
+bool is_precharge_control_i2c_g05_enabled() {
+  return precharge_control_mode == PrechargeControlMode::I2cG05;
+}
 bool precharge_inverter_normally_open_contactor = false;
 uint16_t precharge_max_precharge_time_before_fault = 15000;
 uint16_t Precharge_max_PWM_Freq = 34000;
@@ -32,9 +39,9 @@ static float g05_tps_voltage = 4.0f;
 static float g05_target_to_tps_voltage(int32_t target_dV) {
   float target_V = target_dV / 10.0f;
 
-  // Gemessene Kennlinie:
-  // TPS 4.0 V  -> ca. 175 V extern
-  // TPS 11.0 V -> ca. 500 V extern
+  // Measured transfer curve:
+  // TPS 4.0 V  -> approx. 175 V external
+  // TPS 11.0 V -> approx. 500 V external
   float tps = 4.0f + ((target_V - 175.0f) * 7.0f / 325.0f);
 
   if (tps < 4.0f)
@@ -47,7 +54,7 @@ static float g05_target_to_tps_voltage(int32_t target_dV) {
 
 
 static void disable_precharge_output(gpio_num_t hia4v1_pin) {
-  if (precharge_control_i2c_g05_enabled) {
+  if (is_precharge_control_i2c_g05_enabled()) {
     g05_disable_output();
   } else {
     pinMode(hia4v1_pin, OUTPUT);
@@ -58,14 +65,14 @@ static void disable_precharge_output(gpio_num_t hia4v1_pin) {
 // Initialization functions
 
 bool init_precharge_control() {
-  if (!precharge_control_enabled) {
+  if (!is_precharge_control_enabled()) {
     return true;
   }
 
   auto hia4v1_pin = esp32hal->HIA4V1_PIN();
   auto inverter_disconnect_contactor_pin = esp32hal->INVERTER_DISCONNECT_CONTACTOR_PIN();
 
-  if (precharge_control_i2c_g05_enabled) {
+  if (is_precharge_control_i2c_g05_enabled()) {
     if (!esp32hal->alloc_pins("Precharge control", inverter_disconnect_contactor_pin)) {
       DEBUG_PRINTF("Precharge control setup failed\n");
       return false;
@@ -115,7 +122,7 @@ void handle_precharge_control(unsigned long currentMillis) {
       }
       break;
     case AUTO_PRECHARGE_START:
-      if (precharge_control_i2c_g05_enabled) {
+      if (is_precharge_control_i2c_g05_enabled()) {
         if (g05_i2c_init_if_needed()) {
           g05_set_voltage(4.0f);
           g05_enable_output();
@@ -135,7 +142,7 @@ void handle_precharge_control(unsigned long currentMillis) {
       break;
 
     case AUTO_PRECHARGE_PRECHARGING:
-      if (precharge_control_i2c_g05_enabled) {
+      if (is_precharge_control_i2c_g05_enabled()) {
         if (!g05_is_initialized()) {
           if (currentMillis - last_i2c_update >= 50) {
             last_i2c_update = currentMillis;
@@ -215,7 +222,7 @@ void handle_precharge_control(unsigned long currentMillis) {
           datalayer.battery.status.real_bms_status == BMS_FAULT) {
         pinMode(hia4v1_pin, OUTPUT);
         digitalWrite(hia4v1_pin, LOW);
-        if (precharge_control_i2c_g05_enabled)
+        if (is_precharge_control_i2c_g05_enabled())
           g05_disable_output();
         digitalWrite(inverter_disconnect_contactor_pin, CONTACTOR_ON);
         datalayer.system.status.precharge_status = AUTO_PRECHARGE_FAILURE;
