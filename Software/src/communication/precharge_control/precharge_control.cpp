@@ -1,9 +1,9 @@
 #include "precharge_control.h"
-#include "precharge_control_i2c_g05.h"
 #include <Arduino.h>
 #include "../../datalayer/datalayer.h"
 #include "../../datalayer/datalayer_extended.h"
 #include "../../devboard/hal/hal.h"
+#include "precharge_control_i2c_g05.h"
 #include "src/battery/BATTERIES.h"
 
 // Parameters adjustable by user in Settings page
@@ -51,7 +51,6 @@ static float g05_target_to_tps_voltage(int32_t target_dV) {
 
   return tps;
 }
-
 
 static void disable_precharge_output(gpio_num_t hia4v1_pin) {
   if (is_precharge_control_i2c_g05_enabled()) {
